@@ -591,11 +591,18 @@ app.post('/api/contact', (req: Request, res: Response) => {
     res.json({ message: 'Message received' });
 });
 
-// ============================================================================
-// SERVER START (Modified for Vercel)
+/// ============================================================================
+// SERVER START (Modified for Vercel + ES Modules)
 // ============================================================================
 
-// 1. Keep your 404 Handler
+// IMPORTANT: Vercel sends requests like "/api/cleaners"
+// So your routes MUST start with "/api" to match.
+// If your code currently says app.use('/cleaners'...), CHANGE IT to:
+// app.use('/api/cleaners', cleanerRoutes);
+// app.use('/api/auth', authRoutes);
+
+
+// 1. Keep your 404 Handler (This helps debugging)
 app.use((req, res, next) => {
     res.status(404).json({ message: `Not Found - ${req.originalUrl}` });
 });
@@ -603,10 +610,11 @@ app.use((req, res, next) => {
 // 2. Only "listen" on a port if we are running LOCALLY
 // Vercel manages the connection automatically in production
 if (process.env.NODE_ENV !== 'production') {
+    const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
     });
 }
 
-// 3. Export the app so Vercel can run it as a Serverless Function
-module.exports = app;
+// 3. Export the app using ES Module syntax (Fixes the crash)
+export default app;
