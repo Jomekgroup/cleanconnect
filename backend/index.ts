@@ -592,12 +592,21 @@ app.post('/api/contact', (req: Request, res: Response) => {
 });
 
 // ============================================================================
-// SERVER START
+// SERVER START (Modified for Vercel)
 // ============================================================================
+
+// 1. Keep your 404 Handler
 app.use((req, res, next) => {
     res.status(404).json({ message: `Not Found - ${req.originalUrl}` });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// 2. Only "listen" on a port if we are running LOCALLY
+// Vercel manages the connection automatically in production
+if (process.env.NODE_ENV !== 'production') {
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
+}
+
+// 3. Export the app so Vercel can run it as a Serverless Function
+module.exports = app;
