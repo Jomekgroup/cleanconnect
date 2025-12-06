@@ -1,5 +1,4 @@
-
-import express, { Request, Response, NextFunction, RequestHandler } from 'express';
+import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
@@ -17,12 +16,12 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
 // Increase payload limit for Base64 image uploads
-app.use(express.json({ limit: '50mb' }) as RequestHandler);
+app.use(express.json({ limit: '50mb' }));
 app.use(cors());
 
 // Database Connection
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // e.g., postgres://user:pass@localhost:5432/cleanconnect
+  connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
@@ -30,35 +29,91 @@ const pool = new Pool({
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // ============================================================================
-// TYPES & INTERFACES
+// 🚨 DATABASE SETUP ROUTE (MOVED TO TOP - RUN ONCE)
 // ============================================================================
-interface AuthRequest extends Request {
-  user?: {
-    id: string;
-    role: string;
-    isAdmin: boolean;
-    adminRole?: string;
-  };
-  body: any;
-  params: any;
-  query: any;
-}
+app.get('/api/setup-db', async (req, res) => {
+    try {
+        await pool.query(`
+            CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+            CREATE TABLE IF NOT EXISTS users (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                full_name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'client',
+                is_admin BOOLEAN DEFAULT FALSE,
+                admin_role TEXT,
+                is_suspended BOOLEAN DEFAULT FALSE,
+                phone_number TEXT,
+                state TEXT, city TEXT, address TEXT,
+                profile_photo TEXT, bio TEXT,
+                cleaner_type TEXT, company_name TEXT, experience INTEGER, services TEXT,
+                charge_hourly NUMERIC, charge_daily NUMERIC, charge_per_contract NUMERIC,
+                bank_name TEXT, account_number TEXT,
+                government_id TEXT, business_reg_doc TEXT,
+                subscription_tier TEXT DEFAULT 'Free',
+                pending_subscription TEXT,
+                subscription_receipt TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS bookings (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                client_id UUID REFERENCES users(id),
+                cleaner_id UUID REFERENCES users(id),
+                client_name TEXT, cleaner_name TEXT, service TEXT,
+                date DATE, amount NUMERIC, total_amount NUMERIC,
+                payment_method TEXT, status TEXT DEFAULT 'Upcoming', payment_status TEXT,
+                job_approved_by_client BOOLEAN DEFAULT FALSE, review_submitted BOOLEAN DEFAULT FALSE,
+                payment_receipt TEXT, created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS reviews (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                booking_id UUID REFERENCES bookings(id),
+                cleaner_id UUID REFERENCES users(id),
+                reviewer_name TEXT, rating NUMERIC, timeliness NUMERIC, thoroughness NUMERIC, conduct NUMERIC, comment TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS chats (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                participant_one UUID REFERENCES users(id),
+                participant_two UUID REFERENCES users(id),
+                last_message_id UUID,
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                chat_id UUID REFERENCES chats(id),
+                sender_id UUID REFERENCES users(id),
+                text TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
+        res.send("Database tables created successfully! Go back and Register.");
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error creating tables: " + error.message);
+    }
+});
 
 // ============================================================================
 // UTILITIES
 // ============================================================================
-const generateToken = (id: string, role: string, isAdmin: boolean, adminRole?: string) => {
+const generateToken = (id, role, isAdmin, adminRole) => {
   return jwt.sign({ id, role, isAdmin, adminRole }, JWT_SECRET, { expiresIn: '30d' });
 };
 
-const sendEmail = async (to: string, subject: string, text: string) => {
-  // Mock Email Sender
+const sendEmail = async (to, subject, text) => {
   if (process.env.NODE_ENV !== 'test') {
     console.log(`\n--- [MOCK EMAIL] ---\nTo: ${to}\nSubject: ${subject}\nBody: ${text}\n--------------------\n`);
   }
 };
 
-const handleError = (res: Response, error: any, message: string = 'Server Error') => {
+const handleError = (res, error, message = 'Server Error') => {
   console.error(message, error);
   res.status(500).json({ message: error.message || message });
 };
@@ -66,13 +121,13 @@ const handleError = (res: Response, error: any, message: string = 'Server Error'
 // ============================================================================
 // MIDDLEWARE
 // ============================================================================
-const protect: RequestHandler = (req, res, next) => {
+const protect = (req, res, next) => {
   let token;
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     try {
       token = req.headers.authorization.split(' ')[1];
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
-      (req as AuthRequest).user = decoded;
+      const decoded = jwt.verify(token, JWT_SECRET);
+      req.user = decoded;
       next();
     } catch (error) {
       res.status(401).json({ message: 'Not authorized, token failed' });
@@ -82,16 +137,15 @@ const protect: RequestHandler = (req, res, next) => {
   }
 };
 
-const admin: RequestHandler = (req, res, next) => {
-  const authReq = req as AuthRequest;
-  if (authReq.user && authReq.user.isAdmin) next();
+const admin = (req, res, next) => {
+  if (req.user && req.user.isAdmin) next();
   else res.status(403).json({ message: 'Admin access required' });
 };
 
 // ============================================================================
 // ROUTES: AUTH
 // ============================================================================
-app.post('/api/auth/register', async (req: Request, res: Response) => {
+app.post('/api/auth/register', async (req, res) => {
   const { email, password, role, fullName, phoneNumber, state, city, address, clientType, cleanerType, companyName, experience, services, bio, chargeHourly, chargeDaily, chargePerContract, bankName, accountNumber, profilePhoto, governmentId, businessRegDoc } = req.body;
 
   try {
@@ -100,7 +154,6 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    // Convert arrays to strings for PostgreSQL text[] or JSON columns if needed, assuming Schema uses TEXT for simplicity or JSONB
     const servicesJson = services ? JSON.stringify(services) : null; 
 
     const result = await pool.query(
@@ -121,7 +174,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   } catch (error) { handleError(res, error, 'Registration failed'); }
 });
 
-app.post('/api/auth/login', async (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -130,7 +183,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (user && (await bcrypt.compare(password, user.password_hash))) {
       if (user.is_suspended) return res.status(403).json({ message: 'Account is suspended.' });
       
-      // Normalize DB keys to frontend expectations (camelCase)
       const userData = {
         id: user.id,
         fullName: user.full_name,
@@ -140,7 +192,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         adminRole: user.admin_role,
         profilePhoto: user.profile_photo,
         subscriptionTier: user.subscription_tier,
-        // ... map other fields as necessary
       };
       
       res.json({ token: generateToken(user.id, user.role, user.is_admin, user.admin_role), user: userData });
@@ -153,8 +204,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 // ============================================================================
 // ROUTES: USERS & CLEANERS
 // ============================================================================
-app.get('/api/users/me', protect, async (req: Request, res: Response) => {
-  const authReq = req as AuthRequest;
+app.get('/api/users/me', protect, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
@@ -162,12 +212,11 @@ app.get('/api/users/me', protect, async (req: Request, res: Response) => {
         (SELECT json_agg(b.*) FROM bookings b WHERE b.client_id = u.id OR b.cleaner_id = u.id) as booking_history,
         (SELECT json_agg(r.*) FROM reviews r WHERE r.cleaner_id = u.id) as reviews_data
       FROM users u WHERE u.id = $1
-    `, [authReq.user!.id]);
+    `, [req.user.id]);
     
     const user = result.rows[0];
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Transform DB snake_case to camelCase for frontend
     const formattedUser = {
       id: user.id,
       fullName: user.full_name,
@@ -201,8 +250,7 @@ app.get('/api/users/me', protect, async (req: Request, res: Response) => {
   } catch (error) { handleError(res, error); }
 });
 
-app.put('/api/users/me', protect, async (req: Request, res: Response) => {
-  const authReq = req as AuthRequest;
+app.put('/api/users/me', protect, async (req, res) => {
   const { fullName, phoneNumber, address, bio, services, experience, chargeHourly, chargeDaily, chargePerContract, profilePhoto } = req.body;
   try {
     const result = await pool.query(
@@ -218,21 +266,20 @@ app.put('/api/users/me', protect, async (req: Request, res: Response) => {
         charge_per_contract = COALESCE($9, charge_per_contract),
         profile_photo = COALESCE($10, profile_photo)
        WHERE id = $11 RETURNING *`,
-      [fullName, phoneNumber, address, bio, JSON.stringify(services), experience, chargeHourly, chargeDaily, chargePerContract, profilePhoto, authReq.user!.id]
+      [fullName, phoneNumber, address, bio, JSON.stringify(services), experience, chargeHourly, chargeDaily, chargePerContract, profilePhoto, req.user.id]
     );
-    res.json(result.rows[0]); // Client will likely refresh with getMe anyway
+    res.json(result.rows[0]); 
   } catch (error) { handleError(res, error, 'Update failed'); }
 });
 
-app.get('/api/cleaners', async (req: Request, res: Response) => {
+app.get('/api/cleaners', async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM users WHERE role = 'cleaner' AND is_suspended = false");
-    // Format for frontend
     const cleaners = result.rows.map(c => ({
       id: c.id,
       name: c.full_name,
       photoUrl: c.profile_photo,
-      rating: 5.0, // Calculate from reviews table in real app
+      rating: 5.0, 
       reviews: 0,
       serviceTypes: typeof c.services === 'string' ? JSON.parse(c.services) : (c.services || []),
       state: c.state,
@@ -251,42 +298,39 @@ app.get('/api/cleaners', async (req: Request, res: Response) => {
 // ============================================================================
 // ROUTES: BOOKINGS
 // ============================================================================
-app.post('/api/bookings', protect, async (req: Request, res: Response) => {
-  const authReq = req as AuthRequest;
+app.post('/api/bookings', protect, async (req, res) => {
   const { cleanerId, service, date, amount, totalAmount, paymentMethod } = req.body;
   try {
     const cleanerRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [cleanerId]);
     const cleanerName = cleanerRes.rows[0]?.full_name || 'Cleaner';
     
-    // Fetch user name (Client)
-    const clientRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [authReq.user!.id]);
+    const clientRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
     const clientName = clientRes.rows[0]?.full_name || 'Client';
 
     const result = await pool.query(
       `INSERT INTO bookings (
         client_id, cleaner_id, client_name, cleaner_name, service, date, amount, total_amount, payment_method, status, payment_status, created_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Upcoming', $10, NOW()) RETURNING *`,
-      [authReq.user!.id, cleanerId, clientName, cleanerName, service, date, amount, totalAmount, paymentMethod, paymentMethod === 'Direct' ? 'Not Applicable' : 'Pending Payment']
+      [req.user.id, cleanerId, clientName, cleanerName, service, date, amount, totalAmount, paymentMethod, paymentMethod === 'Direct' ? 'Not Applicable' : 'Pending Payment']
     );
 
-    await sendEmail(authReq.user!.id, 'Booking Confirmation', `You booked ${cleanerName} for ${service}.`);
+    await sendEmail(req.user.id, 'Booking Confirmation', `You booked ${cleanerName} for ${service}.`);
     res.status(201).json(result.rows[0]);
   } catch (error) { handleError(res, error, 'Booking failed'); }
 });
 
-app.post('/api/bookings/:id/cancel', protect, async (req: Request, res: Response) => {
+app.post('/api/bookings/:id/cancel', protect, async (req, res) => {
   try {
     const result = await pool.query("UPDATE bookings SET status = 'Cancelled' WHERE id = $1 RETURNING *", [req.params.id]);
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/bookings/:id/complete', protect, async (req: Request, res: Response) => {
+app.post('/api/bookings/:id/complete', protect, async (req, res) => {
   try {
     const bookingRes = await pool.query('SELECT * FROM bookings WHERE id = $1', [req.params.id]);
     const booking = bookingRes.rows[0];
     
-    // If escrow, client approval triggers pending payout
     let newPaymentStatus = booking.payment_status;
     if (booking.payment_method === 'Escrow' && booking.payment_status === 'Confirmed') {
       newPaymentStatus = 'Pending Payout';
@@ -300,11 +344,10 @@ app.post('/api/bookings/:id/complete', protect, async (req: Request, res: Respon
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/bookings/:id/review', protect, async (req: Request, res: Response) => {
-  const authReq = req as AuthRequest;
+app.post('/api/bookings/:id/review', protect, async (req, res) => {
   const { rating, timeliness, thoroughness, conduct, comment, cleanerId } = req.body;
   try {
-    const clientRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [authReq.user!.id]);
+    const clientRes = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
     const reviewerName = clientRes.rows[0]?.full_name || 'Anonymous';
 
     await pool.query(
@@ -318,7 +361,7 @@ app.post('/api/bookings/:id/review', protect, async (req: Request, res: Response
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/bookings/:id/receipt', protect, async (req: Request, res: Response) => {
+app.post('/api/bookings/:id/receipt', protect, async (req, res) => {
   const { name, dataUrl } = req.body;
   try {
     const receiptJson = JSON.stringify({ name, dataUrl });
@@ -333,26 +376,24 @@ app.post('/api/bookings/:id/receipt', protect, async (req: Request, res: Respons
 // ============================================================================
 // ROUTES: SUBSCRIPTION
 // ============================================================================
-app.post('/api/users/subscription/upgrade', protect, async (req: Request, res: Response) => {
-  const authReq = req as AuthRequest;
+app.post('/api/users/subscription/upgrade', protect, async (req, res) => {
   const { plan } = req.body;
   try {
     const result = await pool.query(
       "UPDATE users SET pending_subscription = $1 WHERE id = $2 RETURNING *",
-      [plan, authReq.user!.id]
+      [plan, req.user.id]
     );
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/users/subscription/receipt', protect, async (req: Request, res: Response) => {
-  const authReq = req as AuthRequest;
+app.post('/api/users/subscription/receipt', protect, async (req, res) => {
   const { name, dataUrl } = req.body;
   try {
     const receiptJson = JSON.stringify({ name, dataUrl });
     const result = await pool.query(
       "UPDATE users SET subscription_receipt = $1 WHERE id = $2 RETURNING *",
-      [receiptJson, authReq.user!.id]
+      [receiptJson, req.user.id]
     );
     res.json(result.rows[0]);
   } catch (error) { handleError(res, error); }
@@ -361,7 +402,7 @@ app.post('/api/users/subscription/receipt', protect, async (req: Request, res: R
 // ============================================================================
 // ROUTES: ADMIN
 // ============================================================================
-app.get('/api/admin/users', protect, admin, async (req: Request, res: Response) => {
+app.get('/api/admin/users', protect, admin, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
     res.json(result.rows.map(u => ({
@@ -374,13 +415,12 @@ app.get('/api/admin/users', protect, admin, async (req: Request, res: Response) 
         subscriptionTier: u.subscription_tier,
         pendingSubscription: u.pending_subscription,
         subscriptionReceipt: u.subscription_receipt ? JSON.parse(u.subscription_receipt) : null,
-        // ... include bookings if needed, or fetch separately
-        bookingHistory: [] // simplified for list view
+        bookingHistory: []
     })));
   } catch (error) { handleError(res, error); }
 });
 
-app.patch('/api/admin/users/:id/status', protect, admin, async (req: Request, res: Response) => {
+app.patch('/api/admin/users/:id/status', protect, admin, async (req, res) => {
   const { isSuspended } = req.body;
   try {
     await pool.query('UPDATE users SET is_suspended = $1 WHERE id = $2', [isSuspended, req.params.id]);
@@ -388,28 +428,28 @@ app.patch('/api/admin/users/:id/status', protect, admin, async (req: Request, re
   } catch (error) { handleError(res, error); }
 });
 
-app.delete('/api/admin/users/:id', protect, admin, async (req: Request, res: Response) => {
+app.delete('/api/admin/users/:id', protect, admin, async (req, res) => {
   try {
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ message: 'User deleted' });
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/admin/bookings/:id/confirm-payment', protect, admin, async (req: Request, res: Response) => {
+app.post('/api/admin/bookings/:id/confirm-payment', protect, admin, async (req, res) => {
   try {
     await pool.query("UPDATE bookings SET payment_status = 'Confirmed' WHERE id = $1", [req.params.id]);
     res.json({ message: 'Payment confirmed' });
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/admin/bookings/:id/mark-paid', protect, admin, async (req: Request, res: Response) => {
+app.post('/api/admin/bookings/:id/mark-paid', protect, admin, async (req, res) => {
   try {
     await pool.query("UPDATE bookings SET payment_status = 'Paid' WHERE id = $1", [req.params.id]);
     res.json({ message: 'Marked as paid' });
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/admin/users/:id/approve-subscription', protect, admin, async (req: Request, res: Response) => {
+app.post('/api/admin/users/:id/approve-subscription', protect, admin, async (req, res) => {
   try {
     const userRes = await pool.query('SELECT pending_subscription FROM users WHERE id = $1', [req.params.id]);
     const plan = userRes.rows[0]?.pending_subscription;
@@ -423,7 +463,7 @@ app.post('/api/admin/users/:id/approve-subscription', protect, admin, async (req
   } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/admin/create-admin', protect, admin, async (req: Request, res: Response) => {
+app.post('/api/admin/create-admin', protect, admin, async (req, res) => {
   const { fullName, email, password, role } = req.body;
   try {
      const salt = await bcrypt.genSalt(10);
@@ -440,20 +480,18 @@ app.post('/api/admin/create-admin', protect, admin, async (req: Request, res: Re
 // ============================================================================
 // ROUTES: CHAT
 // ============================================================================
-app.post('/api/chats', protect, async (req: Request, res: Response) => {
-    const authReq = req as AuthRequest;
+app.post('/api/chats', protect, async (req, res) => {
     const { participantId } = req.body;
-    const userId = authReq.user!.id;
+    const userId = req.user.id;
 
     try {
-        // Check if chat already exists
         const existingChat = await pool.query(
             `SELECT * FROM chats WHERE (participant_one = $1 AND participant_two = $2) OR (participant_one = $2 AND participant_two = $1)`,
             [userId, participantId]
         );
 
         if (existingChat.rows.length > 0) {
-            return res.json({ id: existingChat.rows[0].id, participants: [existingChat.rows[0].participant_one, existingChat.rows[0].participant_two], participantNames: {} }); // Simplify return for now
+            return res.json({ id: existingChat.rows[0].id, participants: [existingChat.rows[0].participant_one, existingChat.rows[0].participant_two], participantNames: {} }); 
         }
 
         const result = await pool.query(
@@ -464,8 +502,7 @@ app.post('/api/chats', protect, async (req: Request, res: Response) => {
     } catch (error) { handleError(res, error, 'Failed to create chat'); }
 });
 
-app.get('/api/chats', protect, async (req: Request, res: Response) => {
-    const authReq = req as AuthRequest;
+app.get('/api/chats', protect, async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT c.*, 
@@ -479,7 +516,7 @@ app.get('/api/chats', protect, async (req: Request, res: Response) => {
              JOIN users u2 ON c.participant_two = u2.id
              WHERE c.participant_one = $1 OR c.participant_two = $1
              ORDER BY m.created_at DESC NULLS LAST`,
-            [authReq.user!.id]
+            [req.user.id]
         );
 
         const chats = result.rows.map(row => ({
@@ -500,7 +537,7 @@ app.get('/api/chats', protect, async (req: Request, res: Response) => {
     } catch (error) { handleError(res, error); }
 });
 
-app.get('/api/chats/:id/messages', protect, async (req: Request, res: Response) => {
+app.get('/api/chats/:id/messages', protect, async (req, res) => {
     try {
         const result = await pool.query(
             'SELECT * FROM messages WHERE chat_id = $1 ORDER BY created_at ASC',
@@ -517,17 +554,15 @@ app.get('/api/chats/:id/messages', protect, async (req: Request, res: Response) 
     } catch (error) { handleError(res, error); }
 });
 
-app.post('/api/chats/:id/messages', protect, async (req: Request, res: Response) => {
-    const authReq = req as AuthRequest;
+app.post('/api/chats/:id/messages', protect, async (req, res) => {
     const { text } = req.body;
     try {
         const result = await pool.query(
             'INSERT INTO messages (chat_id, sender_id, text) VALUES ($1, $2, $3) RETURNING *',
-            [req.params.id, authReq.user!.id, text]
+            [req.params.id, req.user.id, text]
         );
         const message = result.rows[0];
         
-        // Update chat last message
         await pool.query('UPDATE chats SET last_message_id = $1, updated_at = NOW() WHERE id = $2', [message.id, req.params.id]);
 
         res.status(201).json({
@@ -543,7 +578,7 @@ app.post('/api/chats/:id/messages', protect, async (req: Request, res: Response)
 // ============================================================================
 // ROUTES: AI & MISC
 // ============================================================================
-app.post('/api/search/ai', async (req: Request, res: Response) => {
+app.post('/api/search/ai', async (req, res) => {
   const { query } = req.body;
   try {
     const response = await ai.models.generateContent({
@@ -555,17 +590,13 @@ app.post('/api/search/ai', async (req: Request, res: Response) => {
         Example: {"location": "Lagos", "service": "Deep Cleaning", "maxPrice": 50000}`
     });
     
-    // Naive parsing of JSON from text response
     const text = response.text;
-    if (!text) {
-        throw new Error("No response from AI");
-    }
+    if (!text) throw new Error("No response from AI");
     const cleanJson = text.replace(/```json|```/g, '').trim();
     const criteria = JSON.parse(cleanJson);
 
-    // Build SQL Query based on extracted criteria
     let sql = "SELECT id FROM users WHERE role = 'cleaner'";
-    const params: any[] = [];
+    const params = [];
     let paramIndex = 1;
 
     if (criteria.location) {
@@ -573,154 +604,37 @@ app.post('/api/search/ai', async (req: Request, res: Response) => {
         params.push(`%${criteria.location}%`);
         paramIndex++;
     }
-    // ... Add more filters logic here
 
     const result = await pool.query(sql, params);
     res.json({ matchingIds: result.rows.map(r => r.id) });
 
   } catch (error) { 
       console.error(error);
-      // Fallback for demo
       res.json({ matchingIds: [] });
   }
 });
 
-app.post('/api/contact', (req: Request, res: Response) => {
-    // Just log it or store in DB
+app.post('/api/contact', (req, res) => {
     console.log('Contact Form:', req.body);
     res.json({ message: 'Message received' });
 });
 
-/// ============================================================================
+// ============================================================================
 // SERVER START (Modified for Vercel + ES Modules)
 // ============================================================================
 
-// IMPORTANT: Vercel sends requests like "/api/cleaners"
-// So your routes MUST start with "/api" to match.
-// If your code currently says app.use('/cleaners'...), CHANGE IT to:
-// app.use('/api/cleaners', cleanerRoutes);
-// app.use('/api/auth', authRoutes);
-
-
-// 1. Keep your 404 Handler (This helps debugging)
+// 1. Keep your 404 Handler (MUST BE LAST)
 app.use((req, res, next) => {
     res.status(404).json({ message: `Not Found - ${req.originalUrl}` });
 });
 
 // 2. Only "listen" on a port if we are running LOCALLY
-// Vercel manages the connection automatically in production
 if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
     });
 }
-// ============================================================================
-// TEMPORARY: DATABASE SETUP ROUTE (Run this once then delete)
-// ============================================================================
-app.get('/api/setup-db', async (req, res) => {
-    try {
-        await pool.query(`
-            -- 1. Enable UUID extension
-            CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-            -- 2. Create Users Table
-            CREATE TABLE IF NOT EXISTS users (
-                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-                full_name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                phone_number TEXT,
-                role TEXT NOT NULL DEFAULT 'client', -- 'client' or 'cleaner' or 'admin'
-                is_admin BOOLEAN DEFAULT FALSE,
-                admin_role TEXT,
-                is_suspended BOOLEAN DEFAULT FALSE,
-                
-                -- Profile Info
-                state TEXT,
-                city TEXT,
-                address TEXT,
-                profile_photo TEXT,
-                bio TEXT,
-                
-                -- Cleaner Specifics
-                cleaner_type TEXT,
-                company_name TEXT,
-                experience INTEGER,
-                services TEXT, -- Store as JSON string or text
-                charge_hourly NUMERIC,
-                charge_daily NUMERIC,
-                charge_per_contract NUMERIC,
-                bank_name TEXT,
-                account_number TEXT,
-                government_id TEXT,
-                business_reg_doc TEXT,
-                
-                -- Subscription
-                subscription_tier TEXT DEFAULT 'Free',
-                pending_subscription TEXT,
-                subscription_receipt TEXT,
-                
-                created_at TIMESTAMP DEFAULT NOW()
-            );
-
-            -- 3. Create Bookings Table
-            CREATE TABLE IF NOT EXISTS bookings (
-                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-                client_id UUID REFERENCES users(id),
-                cleaner_id UUID REFERENCES users(id),
-                client_name TEXT,
-                cleaner_name TEXT,
-                service TEXT,
-                date DATE,
-                amount NUMERIC,
-                total_amount NUMERIC,
-                payment_method TEXT,
-                status TEXT DEFAULT 'Upcoming',
-                payment_status TEXT,
-                job_approved_by_client BOOLEAN DEFAULT FALSE,
-                review_submitted BOOLEAN DEFAULT FALSE,
-                payment_receipt TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            );
-
-            -- 4. Create Reviews Table
-            CREATE TABLE IF NOT EXISTS reviews (
-                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-                booking_id UUID REFERENCES bookings(id),
-                cleaner_id UUID REFERENCES users(id),
-                reviewer_name TEXT,
-                rating NUMERIC,
-                timeliness NUMERIC,
-                thoroughness NUMERIC,
-                conduct NUMERIC,
-                comment TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            );
-
-            -- 5. Create Chats Table
-            CREATE TABLE IF NOT EXISTS chats (
-                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-                participant_one UUID REFERENCES users(id),
-                participant_two UUID REFERENCES users(id),
-                last_message_id UUID, -- Circular reference handled carefully
-                updated_at TIMESTAMP DEFAULT NOW()
-            );
-
-            -- 6. Create Messages Table
-            CREATE TABLE IF NOT EXISTS messages (
-                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-                chat_id UUID REFERENCES chats(id),
-                sender_id UUID REFERENCES users(id),
-                text TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            );
-        `);
-        res.send("Database tables created successfully!");
-    } catch (error) {
-        console.error(error);
-        res.status(500).send("Error creating tables: " + error.message);
-    }
-});
-// 3. Export the app using ES Module syntax (Fixes the crash)
+// 3. Export the app
 export default app;
