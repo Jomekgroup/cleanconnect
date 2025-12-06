@@ -615,6 +615,112 @@ if (process.env.NODE_ENV !== 'production') {
         console.log(`Server running on port ${PORT}`);
     });
 }
+// ============================================================================
+// TEMPORARY: DATABASE SETUP ROUTE (Run this once then delete)
+// ============================================================================
+app.get('/api/setup-db', async (req, res) => {
+    try {
+        await pool.query(`
+            -- 1. Enable UUID extension
+            CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+            -- 2. Create Users Table
+            CREATE TABLE IF NOT EXISTS users (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                full_name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                phone_number TEXT,
+                role TEXT NOT NULL DEFAULT 'client', -- 'client' or 'cleaner' or 'admin'
+                is_admin BOOLEAN DEFAULT FALSE,
+                admin_role TEXT,
+                is_suspended BOOLEAN DEFAULT FALSE,
+                
+                -- Profile Info
+                state TEXT,
+                city TEXT,
+                address TEXT,
+                profile_photo TEXT,
+                bio TEXT,
+                
+                -- Cleaner Specifics
+                cleaner_type TEXT,
+                company_name TEXT,
+                experience INTEGER,
+                services TEXT, -- Store as JSON string or text
+                charge_hourly NUMERIC,
+                charge_daily NUMERIC,
+                charge_per_contract NUMERIC,
+                bank_name TEXT,
+                account_number TEXT,
+                government_id TEXT,
+                business_reg_doc TEXT,
+                
+                -- Subscription
+                subscription_tier TEXT DEFAULT 'Free',
+                pending_subscription TEXT,
+                subscription_receipt TEXT,
+                
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- 3. Create Bookings Table
+            CREATE TABLE IF NOT EXISTS bookings (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                client_id UUID REFERENCES users(id),
+                cleaner_id UUID REFERENCES users(id),
+                client_name TEXT,
+                cleaner_name TEXT,
+                service TEXT,
+                date DATE,
+                amount NUMERIC,
+                total_amount NUMERIC,
+                payment_method TEXT,
+                status TEXT DEFAULT 'Upcoming',
+                payment_status TEXT,
+                job_approved_by_client BOOLEAN DEFAULT FALSE,
+                review_submitted BOOLEAN DEFAULT FALSE,
+                payment_receipt TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- 4. Create Reviews Table
+            CREATE TABLE IF NOT EXISTS reviews (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                booking_id UUID REFERENCES bookings(id),
+                cleaner_id UUID REFERENCES users(id),
+                reviewer_name TEXT,
+                rating NUMERIC,
+                timeliness NUMERIC,
+                thoroughness NUMERIC,
+                conduct NUMERIC,
+                comment TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- 5. Create Chats Table
+            CREATE TABLE IF NOT EXISTS chats (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                participant_one UUID REFERENCES users(id),
+                participant_two UUID REFERENCES users(id),
+                last_message_id UUID, -- Circular reference handled carefully
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- 6. Create Messages Table
+            CREATE TABLE IF NOT EXISTS messages (
+                id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+                chat_id UUID REFERENCES chats(id),
+                sender_id UUID REFERENCES users(id),
+                text TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
+        res.send("Database tables created successfully!");
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error creating tables: " + error.message);
+    }
+});
 // 3. Export the app using ES Module syntax (Fixes the crash)
 export default app;
