@@ -1,0 +1,22 @@
+
+{
+  "name": "CleanConnect",
+  "short_name": "CleanConnect",
+  "description": "Find trusted cleaners in Nigeria",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7FAFC",
+  "theme_color": "#007A5E",
+  "icons": [
+    {
+      "src": "https://via.placeholder.com/192x192.png?text=CC",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://via.placeholder.com/512x512.png?text=CC",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+
+export const CLEANING_SERVICES = [
+    "Residential/Domestic Cleaning",
+    "Commercial/Office Cleaning",
+    "Post-Construction",
+    "Move-In / Move-Out Cleaning",
+    "Disaster Cleaning & Restoration",
+    "Carpet and Upholstery Cleaning",
+    "Glass Cleaning",
+    "Medical Cleaning",
+    "Industrial Cleaning",
+    "Vehicle Cleaning",
+    "Event Cleaning",
+    "Outdoor/Environmental Cleaning",
+    "Hazardous Waste Cleaning",
+    "Pest control",
+    "Laundry & ironing",
+    "Waste Management",
+    "Deep Cleaning",
+    "Regular/Routine",
+    "Spring Cleaning",
+    "Sanitization/Disinfection",
+    "Green/Eco-Friendly",
+    "Crisis/Trauma Cleaning"
+];

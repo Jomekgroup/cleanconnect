@@ -1,0 +1,7 @@
+{
+  "name": "CleanConnect",
+  "description": "An AI-powered platform to find trusted, top-rated cleaning professionals in Nigeria for home, office, and specialized cleaning services.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
